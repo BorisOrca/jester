@@ -73,7 +73,7 @@ type
     of RouteCode:
       data: ResponseData
 
-const jesterVer = "0.5.0"
+const jesterVer = "0.5.0-with-request-state" 
 
 proc toStr(headers: Option[RawHeaders]): string =
   return $newHttpHeaders(headers.get(@({:})))
@@ -1025,6 +1025,7 @@ const definedRoutes = CacheTable"jester.routes"
 proc processRoutesBody(
   body: NimNode,
   # For HTTP methods.
+  requestStateBody,
   caseStmtGetBody,
   caseStmtPostBody,
   caseStmtPutBody,
@@ -1100,6 +1101,7 @@ proc processRoutesBody(
 
         processRoutesBody(
           definedRoutes[extend[1].strVal],
+          requestStateBody,
           caseStmtGetBody,
           caseStmtPostBody,
           caseStmtPutBody,
@@ -1122,6 +1124,14 @@ proc processRoutesBody(
       discard
     of nnkPragma:
       if body[i][0].strVal.normalize notin ["async", "sync"]:
+        outsideStmts.add(body[i])
+    of nnkAsgn:
+      if body[i][0].strVal.normalize == normalize("request_state_init"):
+        if len(requestStateBody) == 0:
+          requestStateBody.add(newVarStmt(ident("state"), body[i][1]))
+        else:
+          raise newException(JesterError, "request_state_init was set multiple times")
+      else:
         outsideStmts.add(body[i])
     else:
       outsideStmts.add(body[i])
@@ -1185,6 +1195,7 @@ proc routesEx(name: string, body: NimNode): NimNode =
   var caseStmt = newNimNode(nnkCaseStmt)
   caseStmt.add parseExpr("request.reqMethod")
 
+  var requestStateBody = newNimNode(nnkStmtList)
   var caseStmtGetBody = newNimNode(nnkStmtList)
   var caseStmtPostBody = newNimNode(nnkStmtList)
   var caseStmtPutBody = newNimNode(nnkStmtList)
@@ -1205,6 +1216,7 @@ proc routesEx(name: string, body: NimNode): NimNode =
 
   processRoutesBody(
     body,
+    requestStateBody,
     caseStmtGetBody,
     caseStmtPostBody,
     caseStmtPutBody,
@@ -1270,6 +1282,8 @@ proc routesEx(name: string, body: NimNode): NimNode =
   # Wrap the routes inside ``routesList`` blocks accordingly, and add them to
   # the `match` procedure body.
   let routesListIdent = newIdentNode("routesList")
+  matchBody.add(requestStateBody)
+
   matchBody.add(
     quote do:
       block `routesListIdent`:
